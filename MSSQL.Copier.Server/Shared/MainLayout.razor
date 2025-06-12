@@ -1,0 +1,78 @@
+@inherits LayoutComponentBase
+@using MudBlazor
+
+<MudThemeProvider Theme="_theme" IsDarkMode="@_isDarkMode" />
+<MudDialogProvider FullWidth="true" 
+                  CloseButton="true" 
+                  DisableBackdropClick="true" 
+                  Position="DialogPosition.Center" />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1">
+        <MudText Typo="Typo.h6">MSSQL Database Copier</MudText>
+        <MudSpacer />
+        <MudIconButton Icon="@Icons.Material.Filled.DarkMode" 
+                      Color="Color.Inherit" 
+                      OnClick="@(() => _isDarkMode = !_isDarkMode)" />
+    </MudAppBar>
+
+    <MudMainContent>
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private bool _isDarkMode = true;
+
+    private MudTheme _theme = new MudTheme()
+    {
+        Palette = new PaletteLight()
+        {
+            Primary = "#1E88E5",
+            Secondary = "#424242",
+            Background = "#FFFFFF",
+            DrawerBackground = "#FFFFFF",
+            AppbarBackground = "#1E88E5",
+            Surface = "#FFFFFF",
+            TextPrimary = "#424242",
+            TextSecondary = "#666666"
+        },
+        PaletteDark = new PaletteDark()
+        {
+            Primary = "#90CAF9",
+            Secondary = "#B0BEC5",
+            Background = "#121212",
+            DrawerBackground = "#1A1A1A",
+            AppbarBackground = "#1A1A1A",
+            Surface = "#1A1A1A",
+            TextPrimary = "#FFFFFF",
+            TextSecondary = "#B0BEC5"
+        },
+        Typography = new Typography()
+        {
+            Default = new Default()
+            {
+                FontFamily = new[] { "Roboto", "Helvetica", "Arial", "sans-serif" }
+            }
+        },
+        LayoutProperties = new LayoutProperties()
+        {
+            DefaultBorderRadius = "8px",
+            DrawerWidthLeft = "300px",
+            DrawerWidthRight = "300px",
+            DrawerMiniWidthLeft = "80px",
+            DrawerMiniWidthRight = "80px",
+            AppbarHeight = "64px"
+        },
+        ZIndex = new ZIndex()
+        {
+            Drawer = 1100,
+            AppBar = 1200,
+            Dialog = 1300,
+            Popover = 1400,
+            Snackbar = 1500,
+            Tooltip = 1600
+        }
+    };
+} 

@@ -1,0 +1,1208 @@
+@page "/"
+@using MSSQL.Copier.Server.Models
+@using MSSQL.Copier.Server.Services
+@using MudBlazor
+@using MudBlazor.Services
+@using MudBlazor.Utilities
+@using Microsoft.AspNetCore.Components
+@using System.Collections.Concurrent
+@inject DatabaseService DatabaseService
+@inject ConnectionProfileService ProfileService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JSRuntime
+@implements IDisposable
+
+<style>
+    .stats-card {
+        background: var(--mud-palette-background-grey);
+        transition: all 0.3s ease;
+    }
+    .stats-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--mud-elevation-4);
+    }
+    .chart-container {
+        height: 200px;
+        width: 100%;
+    }
+    .table-section {
+        margin-bottom: 1rem;
+    }
+    .active-table {
+        background-color: var(--mud-palette-background-grey);
+        border-radius: var(--mud-default-borderradius);
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    .table-progress {
+        margin: 0.5rem 0;
+    }
+    .status-grid {
+        display: flex;
+        gap: 1rem;
+        overflow-x: auto;
+        padding: 1rem 0;
+    }
+    .status-column {
+        flex: 1;
+        min-width: 200px;
+        max-width: 300px;
+    }
+    .status-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .table-card {
+        background: var(--mud-palette-background-grey);
+        border-radius: var(--mud-default-borderradius);
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
+        transition: all 0.2s ease;
+    }
+    .table-card:hover {
+        transform: translateY(-2px);
+    }
+    .progress-indicator {
+        height: 4px;
+        border-radius: 2px;
+        margin: 0.5rem 0;
+    }
+</style>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    <MudGrid>
+        <MudItem xs="12">
+            <MudCard Elevation="3" Class="rounded-lg">
+                <MudCardHeader>
+                    <CardHeaderContent>
+                        <MudText Typo="Typo.h5">SQL Server Database Copier</MudText>
+                    </CardHeaderContent>
+                    <CardHeaderActions>
+                        <MudIconButton Icon="@Icons.Material.Filled.DarkMode" 
+                                     Color="Color.Inherit" 
+                                     OnClick="@(() => _isDarkMode = !_isDarkMode)" />
+                        <MudTooltip Text="Save current settings as profile">
+                            <MudIconButton Icon="@Icons.Material.Filled.Save" 
+                                         Color="Color.Primary" 
+                                         OnClick="@(() => SaveProfile())"
+                                         Disabled="@(_isCopying || string.IsNullOrWhiteSpace(_profile.Name))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Delete current profile">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" 
+                                         Color="Color.Error"
+                                         OnClick="@(() => DeleteProfile())"
+                                         Disabled="@(_isCopying || string.IsNullOrWhiteSpace(_profile.Name))" />
+                        </MudTooltip>
+                    </CardHeaderActions>
+                </MudCardHeader>
+
+                <MudCardContent>
+                    <MudForm Model="@_config" @ref="@_form" Dense="true">
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="ConnectionProfile"
+                                         Label="Load Profile"
+                                         Value="_selectedProfile"
+                                         ValueChanged="@(profile => LoadSelectedProfile(profile))"
+                                         Dense="true"
+                                         Variant="Variant.Outlined"
+                                         Clearable="true">
+                                    @foreach (var profile in ProfileService.GetProfiles())
+                                    {
+                                        <MudSelectItem Value="@profile">
+                                            <div class="d-flex flex-column py-1">
+                                                <MudText Typo="Typo.body1">@profile.Name</MudText>
+                                                @if (!string.IsNullOrEmpty(profile.Description))
+                                                {
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                        @profile.Description
+                                                    </MudText>
+                                                }
+                                            </div>
+                                        </MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+
+                            <MudItem xs="12" sm="6">
+                                <MudTextField @bind-Value="_profile.Name"
+                                            Label="Profile Name"
+                                            Dense="true"
+                                            Variant="Variant.Outlined"
+                                            Class="rounded-lg"
+                                            Required="true"
+                                            RequiredError="Profile name is required" />
+                            </MudItem>
+
+                            <MudItem xs="12">
+                                <MudTextField @bind-Value="_profile.Description"
+                                            Label="Profile Description"
+                                            Dense="true"
+                                            Variant="Variant.Outlined"
+                                            Class="rounded-lg"
+                                            Lines="2" />
+                            </MudItem>
+
+                            <MudItem xs="12">
+                                <MudExpansionPanels Dense="true" DisableBorders="true" Elevation="0">
+                                    <MudExpansionPanel Text="Connection Settings" Class="rounded-lg">
+                                        <MudGrid Spacing="2">
+                                            <MudItem xs="12">
+                                                <MudTextField @bind-Value="_profile.SourceConnectionString"
+                                                            Label="Source Connection String"
+                                                            Dense="true"
+                                                            Variant="Variant.Outlined"
+                                                            Class="rounded-lg"
+                                                            Required="true"
+                                                            RequiredError="Source connection string is required" />
+                                            </MudItem>
+
+                                            <MudItem xs="12">
+                                                <MudTextField @bind-Value="_profile.DatabaseName"
+                                                            Label="Database Name"
+                                                            Dense="true"
+                                                            Variant="Variant.Outlined"
+                                                            Class="rounded-lg"
+                                                            Required="true"
+                                                            RequiredError="Database name is required" />
+                                            </MudItem>
+
+                                            <MudItem xs="12" sm="6">
+                                                <MudSwitch @bind-Checked="_profile.IsLocalDestination"
+                                                          Label="Copy to Local Database"
+                                                          Color="Color.Primary"
+                                                          Dense="true" />
+                                            </MudItem>
+
+                                            <MudItem xs="12" sm="6">
+                                                <MudNumericField @bind-Value="_profile.MaxParallelTables"
+                                                               Label="Max Parallel Tables"
+                                                               Min="1"
+                                                               Max="10"
+                                                               Dense="true"
+                                                               Variant="Variant.Outlined"
+                                                               Class="rounded-lg" />
+                                            </MudItem>
+
+                                            @if (!_profile.IsLocalDestination)
+                                            {
+                                                <MudItem xs="12">
+                                                    <MudTextField @bind-Value="_profile.DestinationConnectionString"
+                                                                Label="Destination Connection String"
+                                                                Dense="true"
+                                                                Variant="Variant.Outlined"
+                                                                Class="rounded-lg"
+                                                                Required="true"
+                                                                RequiredError="Destination connection string is required" />
+                                                </MudItem>
+                                            }
+                                        </MudGrid>
+                                    </MudExpansionPanel>
+                                </MudExpansionPanels>
+                            </MudItem>
+                        </MudGrid>
+                    </MudForm>
+                </MudCardContent>
+
+                <MudCardActions Class="pb-4 pl-4">
+                    <MudButton Variant="Variant.Filled"
+                              StartIcon="@Icons.Material.Filled.PlayArrow"
+                              Color="Color.Primary"
+                              Size="Size.Small"
+                              OnClick="@(async () => await StartCopy())"
+                              Disabled="@((_isCopying && !_progress?.IsCancelled == true) || IsFormInvalid())"
+                              Class="mr-2 rounded-lg">
+                        @if (_progress?.IsCancelled == true)
+                        {
+                            <span>Resume Copy</span>
+                        }
+                        else
+                        {
+                            <span>Start Copy</span>
+                        }
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Filled"
+                              StartIcon="@Icons.Material.Filled.Stop"
+                              Color="Color.Error"
+                              Size="Size.Small"
+                              OnClick="@(() => CancelCopy())"
+                              Disabled="@(!_isCopying || _progress?.IsCancelled == true)"
+                              Class="mr-2 rounded-lg">
+                        Cancel
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Filled"
+                              StartIcon="@Icons.Material.Filled.Refresh"
+                              Color="Color.Warning"
+                              Size="Size.Small"
+                              OnClick="@(async () => await RetryFailedTables())"
+                              Disabled="@(_isCopying || !HasFailedTables)"
+                              Class="rounded-lg">
+                        Retry Failed (@(_progress?.FailedTables.Count ?? 0))
+                    </MudButton>
+                </MudCardActions>
+            </MudCard>
+        </MudItem>
+
+        @if (_progress != null)
+        {
+            <MudItem xs="12" sm="8">
+                <MudCard Elevation="3" Class="rounded-lg">
+                    <MudCardHeader>
+                        <CardHeaderContent>
+                            <MudText Typo="Typo.h6">Tables Status</MudText>
+                        </CardHeaderContent>
+                        <CardHeaderActions>
+                            <MudChip Color="@GetProgressColor()" Size="Size.Small" Class="rounded-lg">
+                                @if (_progress.IsCancelled)
+                                {
+                                    <span>Cancelled</span>
+                                }
+                                else if (_progress.IsCompleted)
+                                {
+                                    <span>Completed</span>
+                                }
+                                else if (_progress.IsRetrying)
+                                {
+                                    <span>Retrying (@_progress.RetryAttempt)</span>
+                                }
+                                else
+                                {
+                                    <span>In Progress (@_progress.ActiveTables.Count parallel)</span>
+                                }
+                            </MudChip>
+                        </CardHeaderActions>
+                    </MudCardHeader>
+
+                    <MudCardContent>
+                        <MudProgressLinear Value="@GetOverallProgress()" 
+                                         Color="@GetProgressColor()"
+                                         Class="my-2 rounded-lg" />
+                        <MudText Typo="Typo.caption" Class="mb-4">
+                            @($"{_progress.CompletedTables.Count} of {_progress.TotalTables} tables processed")
+                        </MudText>
+
+                        <div class="status-grid">
+                            @{
+                                var tableGroups = GetGroupedTableStatus().ToList();
+                                
+                                // Show Copying/In Progress first
+                                var copyingGroup = tableGroups.FirstOrDefault(g => g.Key == TableState.Copying);
+                                if (copyingGroup != null)
+                                {
+                                    <div class="status-column">
+                                        <div class="status-header">
+                                            <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Info" />
+                                            <MudText Typo="Typo.subtitle1">Copying (@copyingGroup.Count())</MudText>
+                                        </div>
+                                        @foreach (var info in copyingGroup.OrderByDescending(t => t.LastUpdated))
+                                        {
+                                            <div class="table-card">
+                                                <MudText Typo="Typo.body2">@info.TableName</MudText>
+                                                <div class="progress-indicator" style="background: var(--mud-palette-info);">
+                                                    <div style="width: @(info.Progress)%; height: 100%; background: var(--mud-palette-info-darken);"></div>
+                                                </div>
+                                                <MudText Typo="Typo.caption">
+                                                    @($"{info.CurrentRows:N0} of {info.TotalRows:N0} rows")
+                                                </MudText>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+
+                                // Show Pending tables
+                                var pendingTables = GetPendingTables();
+                                if (pendingTables.Any())
+                                {
+                                    <div class="status-column">
+                                        <div class="status-header">
+                                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Color="Color.Default" />
+                                            <MudText Typo="Typo.subtitle1">Pending (@pendingTables.Count)</MudText>
+                                        </div>
+                                        @foreach (var tableName in pendingTables.Take(5))
+                                        {
+                                            <div class="table-card">
+                                                <MudText Typo="Typo.body2">@tableName</MudText>
+                                            </div>
+                                        }
+                                        @if (pendingTables.Count > 5)
+                                        {
+                                            <MudButton Color="Color.Default" 
+                                                      Variant="Variant.Text" 
+                                                      Size="Size.Small"
+                                                      OnClick="@(() => _showAllPending = !_showAllPending)">
+                                                @(_showAllPending ? "Show Less" : $"Show {pendingTables.Count - 5} More")
+                                            </MudButton>
+                                            @if (_showAllPending)
+                                            {
+                                                @foreach (var tableName in pendingTables.Skip(5))
+                                                {
+                                                    <div class="table-card">
+                                                        <MudText Typo="Typo.body2">@tableName</MudText>
+                                                    </div>
+                                                }
+                                            }
+                                        }
+                                    </div>
+                                }
+
+                                // Show Completed tables
+                                var completedGroup = tableGroups.FirstOrDefault(g => g.Key == TableState.Completed);
+                                if (completedGroup != null)
+                                {
+                                    <div class="status-column">
+                                        <div class="status-header">
+                                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                                            <MudText Typo="Typo.subtitle1">Completed (@completedGroup.Count())</MudText>
+                                        </div>
+                                        @foreach (var info in completedGroup.OrderByDescending(t => t.LastUpdated).Take(5))
+                                        {
+                                            <div class="table-card">
+                                                <MudText Typo="Typo.body2">@info.TableName</MudText>
+                                                <MudText Typo="Typo.caption">@($"{info.TotalRows:N0} rows copied")</MudText>
+                                            </div>
+                                        }
+                                        @if (completedGroup.Count() > 5)
+                                        {
+                                            <MudButton Color="Color.Default" 
+                                                      Variant="Variant.Text" 
+                                                      Size="Size.Small"
+                                                      OnClick="@(() => _showAllCompleted = !_showAllCompleted)">
+                                                @(_showAllCompleted ? "Show Less" : $"Show {completedGroup.Count() - 5} More")
+                                            </MudButton>
+                                            @if (_showAllCompleted)
+                                            {
+                                                @foreach (var info in completedGroup.OrderByDescending(t => t.LastUpdated).Skip(5))
+                                                {
+                                                    <div class="table-card">
+                                                        <MudText Typo="Typo.body2">@info.TableName</MudText>
+                                                        <MudText Typo="Typo.caption">@($"{info.TotalRows:N0} rows copied")</MudText>
+                                                    </div>
+                                                }
+                                            }
+                                        }
+                                    </div>
+                                }
+
+                                // Show Failed tables
+                                var failedGroup = tableGroups.FirstOrDefault(g => g.Key == TableState.Failed);
+                                if (failedGroup != null)
+                                {
+                                    <div class="status-column">
+                                        <div class="status-header">
+                                            <MudIcon Icon="@Icons.Material.Filled.Error" Color="Color.Error" />
+                                            <MudText Typo="Typo.subtitle1">Failed (@failedGroup.Count())</MudText>
+                                        </div>
+                                        @foreach (var info in failedGroup)
+                                        {
+                                            <div class="table-card">
+                                                <MudText Typo="Typo.body2">@info.TableName</MudText>
+                                                @if (_progress.RetriedTables.Contains(info.TableName))
+                                                {
+                                                    <MudChip Size="Size.Small" Color="Color.Success">Fixed</MudChip>
+                                                }
+                                                <MudText Typo="Typo.caption" Color="Color.Error">@info.ErrorMessage</MudText>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+
+            <MudItem xs="12" sm="4">
+                <MudGrid>
+                    <MudItem xs="12">
+                        <MudCard Elevation="3" Class="stats-card rounded-lg">
+                            <MudCardContent>
+                                <MudText Typo="Typo.h6" Class="mb-4">Statistics</MudText>
+                                <MudStack>
+                                    <MudText>
+                                        <MudIcon Icon="@Icons.Material.Filled.Timer" Class="mr-2" />
+                                        @_progress.ElapsedTime.ToString(@"hh\:mm\:ss")
+                                    </MudText>
+                                    <MudText>
+                                        <MudIcon Icon="@Icons.Material.Filled.Speed" Class="mr-2" />
+                                        @_progress.RowsPerSecond.ToString("N0") rows/sec
+                                    </MudText>
+                                    @if (_progress.IsRetrying)
+                                    {
+                                        <MudText>
+                                            <MudIcon Icon="@Icons.Material.Filled.Refresh" Class="mr-2" />
+                                            @(_progress.RetriedTables.Count) / @(_progress.FailedTables.Count) Fixed
+                                        </MudText>
+                                    }
+                                </MudStack>
+                            </MudCardContent>
+                        </MudCard>
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <MudCard Elevation="3" Class="stats-card rounded-lg">
+                            <MudCardContent>
+                                <MudText Typo="Typo.h6" Class="mb-4">Connection Status</MudText>
+                                <MudStack>
+                                    <MudChip Icon="@Icons.Material.Filled.Storage" 
+                                            Color="@GetConnectionColor(_progress.SourceConnection)" 
+                                            Size="Size.Small"
+                                            Class="rounded-lg">
+                                        Source: @_progress.SourceConnection.State
+                                    </MudChip>
+                                    <MudChip Icon="@Icons.Material.Filled.Storage" 
+                                            Color="@GetConnectionColor(_progress.DestinationConnection)" 
+                                            Size="Size.Small"
+                                            Class="rounded-lg">
+                                        Destination: @_progress.DestinationConnection.State
+                                    </MudChip>
+                                </MudStack>
+                            </MudCardContent>
+                        </MudCard>
+                    </MudItem>
+                </MudGrid>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudTabs Elevation="3" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-6">
+                    <MudTabPanel Text="Failed Tables" Icon="@Icons.Material.Filled.Error">
+                        @if (_progress.FailedTables.Count > 0)
+                        {
+                            <MudList Dense="true" DisablePadding="true">
+                                @foreach (var failure in _progress.FailedTables)
+                                {
+                                    <MudListItem Icon="@GetTableStatusIcon(failure.Key)">
+                                        <MudText>
+                                            <MudText Typo="Typo.body2">
+                                                <strong>@failure.Key</strong>
+                                                @if (_progress.RetriedTables.Contains(failure.Key))
+                                                {
+                                                    <MudChip Size="Size.Small" Color="Color.Success" Class="rounded-lg">Fixed</MudChip>
+                                                }
+                                                else if (_progress.IsRetrying && _progress.CurrentTable == failure.Key)
+                                                {
+                                                    <MudChip Size="Size.Small" Color="Color.Info" Class="rounded-lg">Retrying...</MudChip>
+                                                }
+                                            </MudText>
+                                            <MudText Typo="Typo.caption" Color="@GetTableStatusColor(failure.Key)">
+                                                @failure.Value
+                                            </MudText>
+                                        </MudText>
+                                    </MudListItem>
+                                }
+                            </MudList>
+                        }
+                        else
+                        {
+                            <MudAlert Severity="Severity.Success" Dense="true" Class="rounded-lg">
+                                No failed tables
+                            </MudAlert>
+                        }
+                    </MudTabPanel>
+
+                    <MudTabPanel Text="Logs" Icon="@Icons.Material.Filled.Article">
+                        <MudList Dense="true" DisablePadding="true">
+                            @foreach (var log in _progress.Logs)
+                            {
+                                <MudListItem Icon="@Icons.Material.Filled.Info">
+                                    <MudText Typo="Typo.body2">@log</MudText>
+                                </MudListItem>
+                            }
+                        </MudList>
+                    </MudTabPanel>
+                </MudTabs>
+            </MudItem>
+        }
+    </MudGrid>
+</MudContainer>
+
+@code {
+    private const string PROGRESS_STORAGE_KEY = "copy_progress_state";
+    private DatabaseConfig _config = new();
+    private ConnectionProfile _profile = new();
+    private ConnectionProfile? _selectedProfile;
+    private CopyProgress? _progress;
+    private MudForm? _form;
+    private bool _isCopying;
+    private bool _isDarkMode;
+    private List<double> _performanceHistory = new();
+    private List<string> _timeLabels = new();
+    private System.Threading.Timer? _uiUpdateTimer;
+    private readonly ConcurrentDictionary<string, TableProgressInfo> _tableProgress = new();
+    private bool _showAllCompleted;
+    private bool _showAllPending;
+
+    private enum TableState
+    {
+        Pending,
+        Copying,
+        Completed,
+        Failed,
+        Fixed
+    }
+
+    private class TableProgressInfo
+    {
+        public string TableName { get; set; } = "";
+        public TableState State { get; set; } = TableState.Pending;
+        public double Progress { get; set; }
+        public long CurrentRows { get; set; }
+        public long TotalRows { get; set; }
+        public DateTime LastUpdated { get; set; } = DateTime.Now;
+        public string? ErrorMessage { get; set; }
+
+        public string DisplayStatus => State switch
+        {
+            TableState.Pending => "Pending",
+            TableState.Copying => "Copying",
+            TableState.Completed => "Completed",
+            TableState.Failed => "Failed",
+            TableState.Fixed => "Fixed",
+            _ => "Unknown"
+        };
+
+        public Color StatusColor => State switch
+        {
+            TableState.Pending => Color.Default,
+            TableState.Copying => Color.Info,
+            TableState.Completed => Color.Success,
+            TableState.Failed => Color.Error,
+            TableState.Fixed => Color.Success,
+            _ => Color.Default
+        };
+
+        public string StatusIcon => State switch
+        {
+            TableState.Pending => Icons.Material.Filled.Schedule,
+            TableState.Copying => Icons.Material.Filled.PlayArrow,
+            TableState.Completed => Icons.Material.Filled.CheckCircle,
+            TableState.Failed => Icons.Material.Filled.Error,
+            TableState.Fixed => Icons.Material.Filled.CheckCircle,
+            _ => Icons.Material.Filled.Help
+        };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isDarkMode = true;
+        await LoadProgressState();
+        StartUiUpdateTimer();
+    }
+
+    private IEnumerable<TableProgressInfo> GetTableProgress()
+    {
+        if (_progress == null) return Enumerable.Empty<TableProgressInfo>();
+
+        var allTables = new HashSet<string>();
+        allTables.UnionWith(_progress.ActiveTables);
+        allTables.UnionWith(_progress.CompletedTables);
+        allTables.UnionWith(_progress.FailedTables.Keys);
+        allTables.UnionWith(_progress.TableRowCounts.Keys);
+
+        return allTables.Select(table =>
+        {
+            var info = _tableProgress.GetOrAdd(table, _ => new TableProgressInfo { TableName = table });
+            
+            info.Progress = _progress.CalculateTableProgress(table);
+            info.CurrentRows = _progress.TableProgress.GetValueOrDefault(table, 0);
+            info.TotalRows = _progress.TableRowCounts.GetValueOrDefault(table, 0);
+            info.State = DetermineTableState(table);
+            info.LastUpdated = DateTime.Now;
+
+            return info;
+        }).OrderByDescending(t => t.LastUpdated);
+    }
+
+    private TableState DetermineTableState(string tableName)
+    {
+        if (_progress == null) return TableState.Pending;
+
+        // Currently processing table
+        if (tableName == _progress.CurrentTable)
+            return TableState.Copying;
+
+        // Failed or Fixed tables
+        if (_progress.FailedTables.ContainsKey(tableName))
+            return _progress.RetriedTables.Contains(tableName) ? TableState.Fixed : TableState.Failed;
+
+        // Check if table has any progress
+        var hasProgress = _progress.TableProgress.ContainsKey(tableName);
+        var currentRows = _progress.TableProgress.GetValueOrDefault(tableName, 0);
+        var totalRows = _progress.TableRowCounts.GetValueOrDefault(tableName, 0);
+
+        // If table has any progress at all, it's either Completed or Copying
+        if (hasProgress)
+        {
+            // If current rows >= total rows or table is empty, it's completed
+            if (currentRows >= totalRows || totalRows == 0)
+            {
+                if (!_progress.CompletedTables.Contains(tableName))
+                {
+                    _progress.CompletedTables.Add(tableName);
+                }
+                return TableState.Completed;
+            }
+            // If has progress but not complete, it's copying
+            return TableState.Copying;
+        }
+
+        // If table has no progress at all, it's pending
+        return TableState.Pending;
+    }
+
+    private async Task SaveProgressState()
+    {
+        if (_progress == null) return;
+
+        var state = new
+        {
+            _progress.IsCancelled,
+            _progress.IsCompleted,
+            _progress.IsRetrying,
+            _progress.RetryAttempt,
+            _progress.CurrentTable,
+            ActiveTables = _progress.ActiveTables.ToList(),
+            CompletedTables = _progress.CompletedTables.ToList(),
+            FailedTables = _progress.FailedTables.ToDictionary(x => x.Key, x => x.Value),
+            RetriedTables = _progress.RetriedTables.ToList(),
+            TableProgress = _progress.TableProgress.ToDictionary(x => x.Key, x => x.Value),
+            TableRowCounts = _progress.TableRowCounts.ToDictionary(x => x.Key, x => x.Value),
+            _progress.TotalTables,
+            _progress.ElapsedTime,
+            _progress.RowsPerSecond,
+            Logs = _progress.Logs.ToList()
+        };
+
+        await JSRuntime.InvokeVoidAsync("localStorage.setItem", PROGRESS_STORAGE_KEY, 
+            System.Text.Json.JsonSerializer.Serialize(state));
+    }
+
+    private async Task LoadProgressState()
+    {
+        try
+        {
+            var json = await JSRuntime.InvokeAsync<string>("localStorage.getItem", PROGRESS_STORAGE_KEY);
+            if (string.IsNullOrEmpty(json)) return;
+
+            var state = System.Text.Json.JsonSerializer.Deserialize<dynamic>(json);
+            if (state == null) return;
+
+            _progress = new CopyProgress
+            {
+                IsCancelled = state.GetProperty("IsCancelled").GetBoolean(),
+                IsCompleted = state.GetProperty("IsCompleted").GetBoolean(),
+                IsRetrying = state.GetProperty("IsRetrying").GetBoolean(),
+                RetryAttempt = state.GetProperty("RetryAttempt").GetInt32(),
+                CurrentTable = state.GetProperty("CurrentTable").GetString(),
+                TotalTables = state.GetProperty("TotalTables").GetInt32(),
+                ElapsedTime = TimeSpan.FromTicks(state.GetProperty("ElapsedTime").GetInt64()),
+                RowsPerSecond = state.GetProperty("RowsPerSecond").GetDouble()
+            };
+
+            foreach (var table in state.GetProperty("ActiveTables").EnumerateArray())
+                _progress.ActiveTables.Add(table.GetString());
+
+            foreach (var table in state.GetProperty("CompletedTables").EnumerateArray())
+                _progress.CompletedTables.Add(table.GetString());
+
+            foreach (var table in state.GetProperty("RetriedTables").EnumerateArray())
+                _progress.RetriedTables.Add(table.GetString());
+
+            foreach (var failed in state.GetProperty("FailedTables").EnumerateObject())
+                _progress.FailedTables[failed.Name] = failed.Value.GetString();
+
+            foreach (var progress in state.GetProperty("TableProgress").EnumerateObject())
+                _progress.TableProgress[progress.Name] = progress.Value.GetInt64();
+
+            foreach (var count in state.GetProperty("TableRowCounts").EnumerateObject())
+                _progress.TableRowCounts[count.Name] = count.Value.GetInt64();
+
+            foreach (var log in state.GetProperty("Logs").EnumerateArray())
+                _progress.Logs.Add(log.GetString());
+
+            StateHasChanged();
+        }
+        catch
+        {
+            // If loading fails, start fresh
+            _progress = null;
+        }
+    }
+
+    private void StartUiUpdateTimer()
+    {
+        _uiUpdateTimer?.Dispose();
+        _uiUpdateTimer = new System.Threading.Timer(
+            async _ => 
+            {
+                if (_progress != null)
+                {
+                    await InvokeAsync(() =>
+                    {
+                        // Update states for all tables
+                        foreach (var table in _progress.TableRowCounts.Keys)
+                        {
+                            var info = GetTableInfo(table);
+                            
+                            // Update progress for tables being copied
+                            if (info.State == TableState.Copying)
+                            {
+                                info.Progress = info.TotalRows > 0 
+                                    ? (info.CurrentRows * 100.0 / info.TotalRows) 
+                                    : 0;
+                            }
+                        }
+                        StateHasChanged();
+                    });
+                    await SaveProgressState();
+                }
+            },
+            null,
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(100)
+        );
+    }
+
+    public void Dispose()
+    {
+        _uiUpdateTimer?.Dispose();
+    }
+
+    private List<ChartSeries> GetPerformanceData()
+    {
+        if (_progress == null) return new();
+
+        // Add current performance to history
+        _performanceHistory.Add(_progress.RowsPerSecond);
+        _timeLabels.Add(DateTime.Now.ToString("HH:mm:ss"));
+
+        // Keep only last 10 data points
+        if (_performanceHistory.Count > 10)
+        {
+            _performanceHistory.RemoveAt(0);
+            _timeLabels.RemoveAt(0);
+        }
+
+        return new List<ChartSeries> {
+            new ChartSeries { Name = "Rows/Second", Data = _performanceHistory.ToArray() }
+        };
+    }
+
+    private string[] GetTimeLabels() => _timeLabels.ToArray();
+
+    private bool HasFailedTables => _progress?.FailedTables.Count > 0;
+
+    private bool IsFormInvalid()
+    {
+        return string.IsNullOrWhiteSpace(_profile.SourceConnectionString) || 
+               string.IsNullOrWhiteSpace(_profile.DatabaseName) ||
+               (!_profile.IsLocalDestination && string.IsNullOrWhiteSpace(_profile.DestinationConnectionString));
+    }
+
+    private async Task StartCopy(bool retryMode = false)
+    {
+        try
+        {
+            _isCopying = true;
+            StateHasChanged();
+
+            _config = new DatabaseConfig
+            {
+                ConnectionString = _profile.SourceConnectionString,
+                DatabaseName = _profile.DatabaseName,
+                IsLocalDestination = _profile.IsLocalDestination,
+                DestinationConnectionString = _profile.DestinationConnectionString,
+                MaxParallelTables = 1 // Ensure single table processing
+            };
+
+            if (retryMode && _progress != null)
+            {
+                var tablesToRetry = _progress.FailedTables.Keys.ToList();
+                var failureReasons = new Dictionary<string, string>(_progress.FailedTables);
+                _progress.FailedTables.Clear();
+                _progress.Logs.Add($"Starting retry of {tablesToRetry.Count} failed tables...");
+                
+                foreach (var table in tablesToRetry)
+                {
+                    _progress.Logs.Add($"🔄 Retrying table: {table}");
+                    _progress.Logs.Add($"Previous error: {failureReasons[table]}");
+                }
+            }
+            else if (_progress?.IsCancelled == true)
+            {
+                _progress.IsCancelled = false;
+                _progress.Logs.Add("▶️ Resuming copy operation...");
+            }
+            else
+            {
+                _progress = new CopyProgress();
+                _tableProgress.Clear();
+            }
+
+            _progress = await DatabaseService.CopyDatabaseAsync(_config, async progress => 
+            {
+                if (progress != null)
+                {
+                    await InvokeAsync(() => 
+                    {
+                        _progress = progress;
+                        
+                        // Update states for all tables
+                        foreach (var table in progress.TableProgress.Keys)
+                        {
+                            GetTableInfo(table); // This will update completion status
+                        }
+                        
+                        StateHasChanged();
+                    });
+                    await SaveProgressState();
+                }
+            }, _progress);
+
+            if (_progress.IsCompleted && !_progress.IsCancelled)
+            {
+                // Ensure all processed tables are marked as completed
+                foreach (var table in _progress.TableProgress.Keys)
+                {
+                    if (!_progress.CompletedTables.Contains(table))
+                    {
+                        _progress.CompletedTables.Add(table);
+                    }
+                }
+
+                if (_progress.FailedTables.Count == 0)
+                {
+                    _progress.Logs.Add("✅ Copy operation completed successfully!");
+                    Snackbar.Add("Copy operation completed successfully!", Severity.Success);
+                }
+                else
+                {
+                    _progress.Logs.Add($"⚠️ Copy completed with {_progress.FailedTables.Count} failed tables.");
+                    Snackbar.Add($"Copy completed with {_progress.FailedTables.Count} failed tables.", Severity.Warning);
+                }
+            }
+            else if (_progress.IsCancelled)
+            {
+                _progress.Logs.Add("⏸️ Copy operation cancelled. You can resume when ready.");
+                Snackbar.Add("Copy operation cancelled. You can resume when ready.", Severity.Info);
+            }
+
+            await SaveProgressState();
+        }
+        catch (Exception ex)
+        {
+            if (_progress != null)
+            {
+                _progress.Logs.Add($"❌ Error: {ex.Message}");
+                await SaveProgressState();
+            }
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isCopying = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CancelCopy()
+    {
+        try
+        {
+            DatabaseService.CancelCopy();
+            if (_progress != null)
+            {
+                _progress.IsCancelled = true;
+                _progress.Logs.Add("Copy operation cancelled by user");
+                StateHasChanged();
+            }
+            Snackbar.Add("Copy operation cancelled", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error cancelling copy: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RetryFailedTables()
+    {
+        try
+        {
+            if (_progress == null || !HasFailedTables) return;
+
+            _progress.IsRetrying = true;
+            _progress.RetryAttempt++;
+            _progress.RetriedTables = new HashSet<string>();
+            
+            var failedTableCount = _progress.FailedTables.Count;
+            _progress.Logs.Add($"Starting retry attempt {_progress.RetryAttempt} for {failedTableCount} failed tables...");
+            
+            await StartCopy(retryMode: true);
+
+            // Check if all retries were successful
+            if (_progress.RetriedTables.Count == failedTableCount)
+            {
+                _progress.IsRetrying = false;
+                _progress.Logs.Add($"✅ Successfully retried all {failedTableCount} failed tables!");
+                Snackbar.Add($"Successfully retried all {failedTableCount} tables!", Severity.Success);
+                
+                // Clear failed tables list since all were successful
+                _progress.FailedTables.Clear();
+                StateHasChanged();
+            }
+            else if (_progress.RetriedTables.Count > 0)
+            {
+                _progress.Logs.Add($"📝 Partially successful retry: Fixed {_progress.RetriedTables.Count} out of {failedTableCount} tables");
+                Snackbar.Add($"Partially successful retry: Fixed {_progress.RetriedTables.Count} out of {failedTableCount} tables", Severity.Warning);
+            }
+            else
+            {
+                _progress.Logs.Add("❌ Retry attempt failed: No tables were successfully retried");
+                Snackbar.Add("Retry attempt failed: No tables were successfully retried", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            _progress.Logs.Add($"❌ Error during retry: {ex.Message}");
+            Snackbar.Add($"Error during retry: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            if (_progress != null)
+            {
+                _progress.IsRetrying = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void LoadSelectedProfile(ConnectionProfile? profile)
+    {
+        try
+        {
+            // Reset form if profile is null
+            if (profile == null)
+            {
+                _profile = new ConnectionProfile();
+                _selectedProfile = null;
+                _config = new DatabaseConfig();
+                StateHasChanged();
+                return;
+            }
+
+            // Validate profile data
+            if (string.IsNullOrWhiteSpace(profile.Name))
+            {
+                Snackbar.Add("Invalid profile: Name is required", Severity.Warning);
+                return;
+            }
+
+            // Create new instances to avoid reference issues
+            _profile = new ConnectionProfile
+            {
+                Name = profile.Name,
+                Description = profile.Description,
+                SourceConnectionString = profile.SourceConnectionString,
+                DatabaseName = profile.DatabaseName,
+                IsLocalDestination = profile.IsLocalDestination,
+                DestinationConnectionString = profile.DestinationConnectionString,
+                LastUsed = profile.LastUsed,
+                TotalTablesCopied = profile.TotalTablesCopied,
+                TotalRowsCopied = profile.TotalRowsCopied,
+                TotalCopyTime = profile.TotalCopyTime,
+                AverageRowsPerSecond = profile.AverageRowsPerSecond,
+                MaxParallelTables = profile.MaxParallelTables
+            };
+
+            _selectedProfile = _profile;
+            
+            _config = new DatabaseConfig
+            {
+                ConnectionString = profile.SourceConnectionString,
+                DatabaseName = profile.DatabaseName,
+                IsLocalDestination = profile.IsLocalDestination,
+                DestinationConnectionString = profile.DestinationConnectionString,
+                MaxParallelTables = profile.MaxParallelTables
+            };
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading profile: {ex.Message}", Severity.Error);
+            // Reset to safe state
+            _profile = new ConnectionProfile();
+            _selectedProfile = null;
+            _config = new DatabaseConfig();
+            StateHasChanged();
+        }
+    }
+
+    private void SaveProfile()
+    {
+        try
+        {
+            ProfileService.SaveProfile(_profile);
+            _selectedProfile = _profile;
+            Snackbar.Add("Profile saved successfully", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving profile: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void DeleteProfile()
+    {
+        try
+        {
+            ProfileService.DeleteProfile(_profile.Name);
+            _profile = new ConnectionProfile();
+            _selectedProfile = null;
+            _config = new DatabaseConfig();
+            Snackbar.Add("Profile deleted successfully", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error deleting profile: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private Color GetProgressColor()
+    {
+        if (_progress == null) return Color.Primary;
+        if (_progress.IsCancelled) return Color.Warning;
+        if (_progress.IsRetrying) return Color.Info;
+        if (_progress.FailedTables.Count > 0 && !_progress.RetriedTables.Any()) return Color.Error;
+        if (_progress.CompletedTables.Count == _progress.TotalTables) return Color.Success;
+        return Color.Primary;
+    }
+
+    private Color GetConnectionColor(ConnectionStatus status)
+    {
+        return status.IsConnected ? Color.Success : Color.Error;
+    }
+
+    private Color GetTableStatusColor(string tableName)
+    {
+        if (_progress?.RetriedTables.Contains(tableName) == true)
+            return Color.Success;
+        if (_progress?.IsRetrying == true && _progress.CurrentTable == tableName)
+            return Color.Info;
+        if (_progress?.FailedTables.ContainsKey(tableName) == true)
+            return Color.Error;
+        return Color.Success;
+    }
+
+    private string GetTableStatusIcon(string tableName)
+    {
+        if (_progress?.RetriedTables.Contains(tableName) == true)
+            return Icons.Material.Filled.CheckCircle;
+        if (_progress?.IsRetrying == true && _progress.CurrentTable == tableName)
+            return Icons.Material.Filled.Refresh;
+        if (_progress?.FailedTables.ContainsKey(tableName) == true)
+            return Icons.Material.Filled.Error;
+        return Icons.Material.Filled.CheckCircle;
+    }
+
+    private double GetTableProgress(string tableName)
+    {
+        if (_progress == null) return 0;
+        return _progress.CalculateTableProgress(tableName);
+    }
+
+    private double GetOverallProgress()
+    {
+        if (_progress == null) return 0;
+        return _progress.CalculateOverallProgress();
+    }
+
+    private TableProgressInfo GetTableInfo(string tableName)
+    {
+        if (_progress == null) return new TableProgressInfo { TableName = tableName };
+
+        var info = _tableProgress.GetOrAdd(tableName, _ => new TableProgressInfo { TableName = tableName });
+        
+        info.CurrentRows = _progress.TableProgress.GetValueOrDefault(tableName, 0);
+        info.TotalRows = _progress.TableRowCounts.GetValueOrDefault(tableName, 0);
+        info.Progress = info.TotalRows > 0 ? (info.CurrentRows * 100.0 / info.TotalRows) : 0;
+        info.LastUpdated = DateTime.Now;
+
+        // Update state based on table status
+        info.State = DetermineTableState(tableName);
+
+        // Store error message if failed
+        if (_progress.FailedTables.TryGetValue(tableName, out var errorMessage))
+        {
+            info.ErrorMessage = errorMessage;
+        }
+
+        return info;
+    }
+
+    private IEnumerable<IGrouping<TableState, TableProgressInfo>> GetGroupedTableStatus()
+    {
+        if (_progress == null) return Enumerable.Empty<IGrouping<TableState, TableProgressInfo>>();
+
+        return _progress.TableRowCounts.Keys
+            .Select(GetTableInfo)
+            .Where(info => 
+            {
+                // Only show in Pending if it has NO progress record
+                if (info.State == TableState.Pending)
+                {
+                    return !_progress.TableProgress.ContainsKey(info.TableName);
+                }
+                return true;
+            })
+            .GroupBy(info => info.State)
+            .OrderBy(g => GetStateOrder(g.Key));
+    }
+
+    private int GetStateOrder(TableState state) => state switch
+    {
+        TableState.Copying => 1,    // Show active first
+        TableState.Failed => 2,     // Then failed
+        TableState.Pending => 3,    // Then pending
+        TableState.Completed => 4,  // Then completed
+        TableState.Fixed => 5,      // Then fixed
+        _ => 99
+    };
+
+    private List<string> GetPendingTables()
+    {
+        if (_progress == null) return new List<string>();
+
+        return _progress.TableRowCounts.Keys
+            .Where(tableName => 
+            {
+                // A table is pending ONLY if:
+                // 1. It has NO progress record
+                // 2. Is not currently being processed
+                // 3. Has not failed
+                // 4. Is not completed
+                return !_progress.TableProgress.ContainsKey(tableName) &&
+                       tableName != _progress.CurrentTable &&
+                       !_progress.FailedTables.ContainsKey(tableName) &&
+                       !_progress.CompletedTables.Contains(tableName);
+            })
+            .OrderBy(t => t)
+            .ToList();
+    }
+
+    private Dictionary<TableState, bool> _expandedGroups = new();
+
+    private bool IsGroupExpanded(TableState state) => 
+        _expandedGroups.GetValueOrDefault(state, false);
+
+    private void ToggleGroupExpansion(TableState state)
+    {
+        if (_expandedGroups.ContainsKey(state))
+            _expandedGroups[state] = !_expandedGroups[state];
+        else
+            _expandedGroups[state] = true;
+    }
+} 

@@ -1,0 +1,16 @@
+{
+  "IPTSCoreProd": {
+    "Name": "IPTSCoreProd",
+    "Description": "IPTSCoreProd",
+    "SourceConnectionString": "Data Source=dbs-prod-ipts-az.database.usgovcloudapi.net;Initial Catalog=dbs-prod-ipts-az-iptscore;Persist Security Info=True;User Id=akhalil;Password=q5VzK17?vre??",
+    "DatabaseName": "dbs-prod-ipts-az-iptscore",
+    "IsLocalDestination": false,
+    "DestinationConnectionString": "Server=localhost\\SQLEXPRESS;Database=dbs-prod-ipts-az-iptscore;Trusted_Connection=True;",
+    "LastUsed": "0001-01-01T00:00:00",
+    "TotalRowsCopied": 0,
+    "TotalTablesCopied": 0,
+    "TotalCopyTime": "00:00:00",
+    "AverageRowsPerSecond": 0,
+    "MaxParallelTables": 6
+  }
+}
